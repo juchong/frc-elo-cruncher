@@ -7,36 +7,50 @@ import json
 import re
 import logging
 import decimal
+import argparse
+import statistics
+import creds
 
-API_KEY = '4ZhSjJb0eE1Fhkw5MJ80Dscvn8bGiFI93XQBPrzl4RtWPxJuJZZWuUYqNmoBFnDa'
 BASE_URL = 'https://www.thebluealliance.com/api/v3'
 scoutingdb = mysql.connector.connect(
-	host='localhost',
-	user='root',
-	passwd='KikoTheDerpyCat',
-	database='scouting2020'
+	host=creds.HOST,
+	user=creds.USER,
+	passwd=creds.PASS,
+	database=creds.DB
 )
 sqlsession = FuturesSession()
-sqlsession.headers.update({'X-TBA-Auth-Key':API_KEY})
+sqlsession.headers.update({'X-TBA-Auth-Key':creds.API_KEY})
 
-stdev = decimal.Decimal(58.3)
+#stdev = decimal.Decimal(17.1) #2019
+stdev = decimal.Decimal(21.201082058644808) #2022
 
 dbcursor = scoutingdb.cursor()
 
+def findStdev():
+	matchDataPull()
+	dbcursor.execute("select redscore, bluescore from mastermatchlist where playedtime is not null and complevel='qm'")
+	resultdata = dbcursor.fetchall()
+	allscores = list()
+	scoresmean = 0.0
+	for x in resultdata:
+		allscores.append(x[0])
+		allscores.append(x[1])
+	print("New stdev: ")
+	print(statistics.stdev(allscores))
+
 def eventlistPull():
-	future = sqlsession.get(BASE_URL + '/events/2020/simple')
+	input("Are you sure you want to re-initialize the event list? Press CTRL + C to cancel.")
+	dbcursor.execute("delete from eventlist")
+	scoutingdb.commit()
+	future = sqlsession.get(BASE_URL + '/events/2022/simple')
 	reply = future.result()
 	eventlist = json.loads(reply.content)
 	sql = "insert into eventlist (eventkey, lastmodified) values (%s, %s)"
 	vals = list()
 	futures = list()
 	for x in eventlist:
-		eventfuture = sqlsession.get(BASE_URL + '/event/' + x['key'] + '/matches/simple')
-		futures.append(eventfuture)
-	for y in futures:
-		modifiedreply = y.result()
-		if modifiedreply.content['event_type'] not in (99, 100, -1):
-			vals.append((eventlist[futures.index(y)]['key'], modifiedreply.headers["Last-Modified"]))
+		if x["event_type"] not in {99, 100, -1}:
+			vals.append([x['key'], 0])
 	dbcursor.executemany(sql, vals)
 	scoutingdb.commit()
 
@@ -46,7 +60,7 @@ def matchDataPull():
 	updatedevents = 0
 	futures = list()
 	for x in eventlist:
-		future = sqlsession.get(BASE_URL + '/event/' + x[0] + '/matches/simple', headers={'If-Modified-Since':x[1]})
+		future = sqlsession.get(BASE_URL + '/event/' + x[0] + '/matches/simple', headers={'If-None-Match':x[1]})
 		logging.debug("%s was last modified %s", x[0], x[1])
 		futures.append(future)
 	vals = list()
@@ -58,7 +72,9 @@ def matchDataPull():
 			thiseventkey = eventlist[futures.index(future)][0]
 			logging.info("updates available for event key " + thiseventkey)
 			matchdata = json.loads(reply.content)
-			dbcursor.execute("update eventlist set lastmodified = %s where eventkey = %s", (reply.headers['Last-Modified'], thiseventkey))
+			tmp = reply.headers['etag'].replace("W/","")
+			tmp = tmp.strip('\"')
+			dbcursor.execute("update eventlist set lastmodified = %s where eventkey = %s", (tmp, thiseventkey))
 			updatedevents = updatedevents + 1
 			scoutingdb.commit()
 			for y in matchdata:
@@ -92,11 +108,11 @@ def resetELOs():
 		values.append((x[2], x[0]))
 	dbcursor.executemany(sql, values)
 	scoutingdb.commit()
+	logging.info("Elo table reset!")
 	#re-populate all ELOs to the start-of-season values
 
 def calcELOs():
 	resetELOs()			# commented out to enable incremental calculations only.
-	logging.info("Elo table reset!")
 	dbcursor.execute("select matchkey, red1, red2, red3, blue1, blue2, blue3, redscore, bluescore, actualmargin, complevel from mastermatchlist order by scheduledtime")
 	resultdata = dbcursor.fetchall()
 	sql1 = "update teamEloList set currentelo = %s where teamnumber = %s"
@@ -136,19 +152,32 @@ def lookupTeamELO(teamnumber):
 	teamelo = dbcursor.fetchall()
 	return decimal.Decimal(teamelo[0][0])
 
-def main():
-	logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', filename='tba-pull.log', level=logging.INFO)
-	logging.info("Started")
-	eventupdates = 0
-	try:
-		eventupdates = matchDataPull()
-	except:
-		logging.exception("An error occurred while executing the script.")
-	dbcursor.close()
-	logging.info("Updated match data for %s events", eventupdates)
-	logging.info("Finished")
-
-	
+def main(init: bool, reset: bool, run: bool, calcstdev: bool):
+	if (init):
+		eventlistPull();
+	elif (calcstdev):
+		findStdev();
+	elif (reset):
+		resetELOs();
+	elif (run):
+		logging.basicConfig(format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p', filename='tba-pull.log', level=logging.INFO)
+		logging.info("Started")
+		eventupdates = 0
+		try:
+			eventupdates = matchDataPull()
+		except:
+			logging.exception("An error occurred while executing the script.")
+		dbcursor.close()
+		logging.info("Updated match data for %s events", eventupdates)
+		logging.info("Finished")
+	else:
+		print("Nothing to do!")
 
 if __name__ == "__main__":
-	main()
+	_parser = argparse.ArgumentParser()
+	_parser.add_argument("--init", help=" Initialize database", action="store_true", required=False)
+	_parser.add_argument("--reset", help=" Reset all calculated ELOs to their start of season values", action="store_true", required=False)
+	_parser.add_argument("--run", help=" Run ELO calculator", action="store_true", required=False)
+	_parser.add_argument("--calcstdev", help=" Calculate stdev for current season matches", action="store_true", required=False)
+	_args = _parser.parse_args()
+	main(_args.init, _args.reset, _args.run, _args.calcstdev)
