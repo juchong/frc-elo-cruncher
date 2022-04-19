@@ -147,6 +147,11 @@ def calcELOs():
 		logging.debug("Elos updated for teams in match " + x[0] + "by change amount " + str(elochange))
 	#perfrorm all elo calculations for full match list and udpate
 
+# Copy the contents of currentelo to slowelo (useful for only updating numbers after script executes)
+def copyToSlowColumn():
+	dbcursor.execute("UPDATE teamEloList SET slowelo = currentelo")
+	scoutingdb.commit()
+
 def lookupTeamELO(teamnumber):
 	dbcursor.execute("select currentelo from teamEloList where teamnumber = %s", (teamnumber,))
 	teamelo = dbcursor.fetchall()
@@ -167,6 +172,7 @@ def main(init: bool, reset: bool, run: bool, calcstdev: bool):
 			eventupdates = matchDataPull()
 		except:
 			logging.exception("An error occurred while executing the script.")
+		copyToSlowColumn()
 		dbcursor.close()
 		logging.info("Updated match data for %s events", eventupdates)
 		logging.info("Finished")
