@@ -139,7 +139,8 @@ def cmp22field_button(update: Update, context: CallbackContext) -> None:
     """Parses the CallbackQuery and updates the message text."""
     query = update.callback_query
     query.answer()
-    query.edit_message_text(text=f"{query.data} Elo:" + "\n" + "\n" + field_query(query.data))
+    msg = field_query(query.data)
+    query.edit_message_text(text=f"{query.data} Elo:" + "\n" + "\n" + msg)
 
 # Performs a field Elo query
 def field_query(dat: str):
