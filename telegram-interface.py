@@ -29,8 +29,7 @@ scoutingdb = mysql.connector.connect(
 	host=creds.HOST,
 	user=creds.USER,
 	passwd=creds.PASS,
-	database=creds.DB,
-    connect_timeout=31536000
+	database=creds.DB
 )
 
 dbcursor = scoutingdb.cursor()
